@@ -11,8 +11,7 @@ pub const BUF_SIZE: usize = 0x10000;
 
 #[repr(C)]
 #[derive(PartialEq, Clone, Debug)]
-pub struct ZstdLineReader {
-}
+pub struct ZstdLineReader {}
 
 struct DecoderWrapper<'a> {
     buf: [u8; BUF_SIZE],
@@ -78,37 +77,44 @@ pub extern "C" fn zstd_line_read_new<'a>(zstd_file_path: *const c_char) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn zstd_line_read<'a>(reader: *mut ZstdLineReader) -> *mut c_char {
+pub extern "C" fn zstd_line_read<'a>(
+    reader: *mut ZstdLineReader,
+    line_p: *mut *const c_char,
+    line_len_p: *mut usize,
+) -> isize {
     let wrapper: *mut DecoderWrapper<'a> = reader as *mut DecoderWrapper<'a>;
     let mut line = Vec::with_capacity(BUF_SIZE);
     unsafe {
         match (*wrapper).read_line(&mut line) {
             Ok(len) => {
                 if len == 0 {
-                    return ptr::null::<c_char>() as *mut c_char;
+                    *line_p = ptr::null::<c_char>() as *mut c_char;
+                    *line_len_p = 0;
                 } else {
-                    return CString::from_vec_unchecked(line).into_raw();
+                    *line_p = CString::from_vec_unchecked(line).into_raw();
+                    *line_len_p = len;
                 }
             }
-            Err(e) => {
-                panic!(e)
+            Err(_e) => {
+                return -1;
             }
         }
     }
+    return 0;
 }
 
 #[no_mangle]
 pub extern "C" fn zstd_line_read_delete_line(line: *mut c_char) {
     unsafe {
-	CString::from_raw(line);
+        CString::from_raw(line);
     };
 }
 
 #[no_mangle]
 pub extern "C" fn zstd_line_read_delete(reader: *mut ZstdLineReader) {
     unsafe {
-	let wrapper: *mut DecoderWrapper = reader as *mut DecoderWrapper;
-	Box::from_raw(wrapper);
+        let wrapper: *mut DecoderWrapper = reader as *mut DecoderWrapper;
+        Box::from_raw(wrapper);
     };
 }
 
@@ -151,28 +157,39 @@ mod tests {
         assert_eq!(buf, b"1\n");
         assert_eq!(wrapper.read_line(&mut buf).unwrap(), 5);
         assert_eq!(buf, b"Titi\n");
-        assert_eq!(wrapper.read_line(&mut buf).unwrap(), 0);	
+        assert_eq!(wrapper.read_line(&mut buf).unwrap(), 0);
     }
 
     #[test]
     fn test_c_api_basic() {
         let cstr = CString::new("test1.txt.zst").unwrap();
         let reader = zstd_line_read_new(cstr.as_ptr());
-        let line = zstd_line_read(reader);
+        let mut line: *const c_char = ptr::null::<c_char>();
+        let mut line_len: usize = 0;
+
+        assert_eq!(zstd_line_read(reader, &mut line, &mut line_len), 0);
         assert_eq!(
             dbg!(unsafe { CStr::from_ptr(line) }.to_bytes()),
             b"The Happening\n"
         );
-        let line = zstd_line_read(reader);
+        assert_eq!(b"The Happening\n".len(), line_len);
+
+        assert_eq!(zstd_line_read(reader, &mut line, &mut line_len), 0);
         assert_eq!(dbg!(unsafe { CStr::from_ptr(line) }.to_bytes()), b"ABCDE\n");
-        let line = zstd_line_read(reader);
+        assert_eq!(b"ABCDE\n".len(), line_len);
+
+        assert_eq!(zstd_line_read(reader, &mut line, &mut line_len), 0);
         assert_eq!(dbg!(unsafe { CStr::from_ptr(line) }.to_bytes()), b"\n");
-        let line = zstd_line_read(reader);
+        assert_eq!(b"\n".len(), line_len);
+
+        assert_eq!(zstd_line_read(reader, &mut line, &mut line_len), 0);
         assert_eq!(dbg!(unsafe { CStr::from_ptr(line) }.to_bytes()), b"1\n");
-        let line = zstd_line_read(reader);
+        assert_eq!(b"1\n".len(), line_len);
+
+        assert_eq!(zstd_line_read(reader, &mut line, &mut line_len), 0);
         assert_eq!(dbg!(unsafe { CStr::from_ptr(line) }.to_bytes()), b"Titi\n");
-        let line = zstd_line_read(reader);
-        assert!(line.is_null());
-	zstd_line_read_delete(reader);
+        assert_eq!(b"Titi\n".len(), line_len);
+
+        zstd_line_read_delete(reader);
     }
 }
